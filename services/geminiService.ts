@@ -5,13 +5,20 @@ import { Concept } from "../types";
 const API_KEY = process.env.API_KEY || process.env.GEMINI_API_KEY || '';
 
 let _ai: GoogleGenAI | null = null;
+let _currentKey: string | null = null;
 
 function getAI(): GoogleGenAI | null {
-  if (!API_KEY) {
+  // Check localStorage first for runtime configuration
+  const localKey = typeof window !== 'undefined' ? localStorage.getItem('gemini_api_key') : null;
+  const key = localKey || API_KEY;
+
+  if (!key) {
     return null;
   }
-  if (!_ai) {
-    _ai = new GoogleGenAI({ apiKey: API_KEY });
+  // Always create new instance if key changes or doesn't match
+  if (!_ai || _currentKey !== key) {
+    _ai = new GoogleGenAI({ apiKey: key });
+    _currentKey = key;
   }
   return _ai;
 }
