@@ -1,62 +1,183 @@
-
 import React, { useState, useEffect, useMemo } from 'react';
 import Layout from './components/Layout';
 import Login from './components/Login';
-import { Concept, Difficulty } from './types';
-import { INITIAL_CONCEPTS, SUBJECTS } from './constants';
 import ConceptCard from './components/ConceptCard';
 import QuizModal from './components/QuizModal';
+import StatCard from './components/StatCard';
+import KnowledgeChart from './components/KnowledgeChart';
+import SearchFilter from './components/SearchFilter';
+import AttendanceTracker from './components/AttendanceTracker';
+import AssignmentTracker from './components/AssignmentTracker';
 import { analyzeRetention } from './services/geminiService';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, Cell } from 'recharts';
+import { Concept, Difficulty, Attendance, Assignment } from './types';
+import { SUBJECTS } from './constants';
+import { BarChart, Bar, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import AdminPanel from './components/AdminPanel';
+import FacultyHub from './components/FacultyHub';
+import AdaptiveStudyPlan from './components/AdaptiveStudyPlan';
 
 const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
-  const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return localStorage.getItem('isLoggedIn') === 'true';
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [user, setUser] = useState<{ id: string, username: string, role: string } | null>(null);
+  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    const saved = localStorage.getItem('theme');
+    if (saved) return saved === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
 
-  // Persistence logic
-  const [concepts, setConcepts] = useState<Concept[]>(() => {
-    const saved = localStorage.getItem('concepts');
-    return saved ? JSON.parse(saved) : INITIAL_CONCEPTS;
-  });
+  useEffect(() => {
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  }, [isDarkMode]);
 
+  const toggleTheme = () => setIsDarkMode(!isDarkMode);
+
+  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [attendance, setAttendance] = useState<Attendance[]>([]);
+  const [assignments, setAssignments] = useState<Assignment[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
   const [reviewingConcept, setReviewingConcept] = useState<Concept | null>(null);
-  const [insight, setInsight] = useState<string>('Crunching the numbers on your learning journey...');
+  const [insight, setInsight] = useState<string>('Refining your knowledge roadmap...');
   const [isAddingConcept, setIsAddingConcept] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSubject, setSelectedSubject] = useState('All Subjects');
+  const [showQuestionsForm, setShowQuestionsForm] = useState(false);
+  const [manualQuestions, setManualQuestions] = useState(Array(10).fill({
+    question: '',
+    options: ['', '', '', ''],
+    correctAnswerIndex: 0,
+    explanation: ''
+  }));
+  const [officialConcepts, setOfficialConcepts] = useState<Concept[]>([]);
 
+  // Load user from localStorage on init
   useEffect(() => {
-    localStorage.setItem('concepts', JSON.stringify(concepts));
-  }, [concepts]);
+    const savedUser = localStorage.getItem('user');
+    const savedToken = localStorage.getItem('token');
+    if (savedUser && savedToken) {
+      const parsedUser = JSON.parse(savedUser);
+      setUser(parsedUser);
+      setToken(savedToken);
+      setIsLoggedIn(true);
+      fetchConcepts(parsedUser.id, savedToken);
+      fetchAttendance(parsedUser.id, savedToken);
+      fetchAssignments(parsedUser.id, savedToken);
+      fetchOfficialConcepts(savedToken);
+    }
+  }, []);
 
-  useEffect(() => {
-    localStorage.setItem('gemini_api_key', apiKey);
-  }, [apiKey]);
+  const fetchConcepts = async (userId: string, authToken = token) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`/api/concepts/${userId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        // Map backend retention_score to retentionScore
+        setConcepts(data.map((c: any) => ({
+          ...c,
+          retentionScore: c.retention_score,
+          mastery: c.mastery,
+          reviews: c.reviews.map((r: any) => ({ ...r, timeSpent: r.time_spent }))
+        })));
+      }
+    } catch (err) {
+      console.error("Failed to fetch concepts", err);
+    }
+  };
 
-  const handleLogin = (username: string) => {
+  const fetchAttendance = async (userId: string, authToken = token) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`/api/attendance/${userId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAttendance(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch attendance", err);
+    }
+  };
+
+  const fetchAssignments = async (userId: string, authToken = token) => {
+    if (!authToken) return;
+    try {
+      const response = await fetch(`/api/assignments/${userId}`, {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAssignments(data);
+      }
+    } catch (err) {
+      console.error("Failed to fetch assignments", err);
+    }
+  };
+
+  const fetchOfficialConcepts = async (authToken = token) => {
+    if (!authToken) return;
+    try {
+      const resp = await fetch('/api/official-concepts', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        setOfficialConcepts(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch official concepts', err);
+    }
+  };
+
+  const handleLogin = (userData: any, authToken: string) => {
+    setUser(userData);
+    setToken(authToken);
     setIsLoggedIn(true);
-    localStorage.setItem('isLoggedIn', 'true');
-    // Optional: Store username if needed
-    localStorage.setItem('username', username);
+    localStorage.setItem('user', JSON.stringify(userData));
+    localStorage.setItem('token', authToken);
+    fetchConcepts(userData.id, authToken);
+    fetchAttendance(userData.id, authToken);
+    fetchAssignments(userData.id, authToken);
+    fetchOfficialConcepts(authToken);
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
-    localStorage.removeItem('isLoggedIn');
-    localStorage.removeItem('username');
-    setIsSettingsOpen(false); // Close settings on logout
+    setUser(null);
+    setToken(null);
+    setConcepts([]);
+    setAttendance([]);
+    setAssignments([]);
+    localStorage.removeItem('user');
+    localStorage.removeItem('token');
+    setIsSettingsOpen(false);
   };
 
   // Stats calculation
   const stats = useMemo(() => {
-    const avg = concepts.reduce((acc, c) => acc + c.retentionScore, 0) / concepts.length;
+    const total = concepts.length;
+    const avg = total > 0 ? concepts.reduce((acc, c) => acc + c.retentionScore, 0) / total : 0;
+    const mastered = concepts.filter(c => c.retentionScore >= 80).length;
+    const level = Math.min(10, Math.floor(mastered / 2) + Math.floor(avg / 20) + 1);
+    const progressToNextLevel = (mastered % 2 === 0 ? (avg % 20) * 5 : 50 + (avg % 20) * 2.5);
+
     return {
-      total: concepts.length,
+      total,
       avgRetention: Math.round(avg),
       dueToday: concepts.filter(c => new Date(c.nextReviewDate) <= new Date()).length,
-      streak: 7
+      streak: 7,
+      level,
+      levelProgress: Math.min(100, Math.round(progressToNextLevel))
     };
   }, [concepts]);
 
@@ -74,38 +195,60 @@ const App: React.FC = () => {
     fetchInsight();
   }, [concepts.length, isLoggedIn]);
 
-  const handleReviewComplete = (score: number) => {
-    if (!reviewingConcept) return;
+  const handleReviewComplete = async (score: number) => {
+    if (!reviewingConcept || !user) return;
 
-    const updatedConcepts = concepts.map(c => {
-      if (c.id === reviewingConcept.id) {
-        const newScore = Math.min(100, Math.round((c.retentionScore + score) / 2));
-        const today = new Date();
-        const nextDate = new Date();
-        const interval = score > 80 ? 14 : score > 50 ? 7 : 2;
-        nextDate.setDate(today.getDate() + interval);
+    const today = new Date();
+    const nextDate = new Date();
+    const interval = score > 80 ? 14 : score > 50 ? 7 : 2;
+    nextDate.setDate(today.getDate() + interval);
+    const newRetentionScore = Math.min(100, Math.round((reviewingConcept.retentionScore + score) / 2));
 
-        return {
-          ...c,
-          retentionScore: newScore,
-          lastReviewed: today.toISOString().split('T')[0],
-          nextReviewDate: nextDate.toISOString().split('T')[0],
-          status: newScore > 80 ? 'Mastered' : 'Reviewing' as any,
-          reviews: [...c.reviews, { id: Date.now().toString(), date: today.toISOString().split('T')[0], score, timeSpent: 10 }]
-        };
-      }
-      return c;
-    });
+    const reviewData = {
+      id: Date.now().toString(),
+      concept_id: reviewingConcept.id,
+      date: today.toISOString().split('T')[0],
+      score,
+      timeSpent: 10
+    };
 
-    setConcepts(updatedConcepts);
-    setReviewingConcept(null);
+    const updatedConcept = {
+      retentionScore: newRetentionScore,
+      lastReviewed: today.toISOString().split('T')[0],
+      nextReviewDate: nextDate.toISOString().split('T')[0],
+      status: newRetentionScore > 80 ? 'Mastered' : 'Reviewing' as any
+    };
+
+    try {
+      await fetch(`/api/concepts/${reviewingConcept.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedConcept)
+      });
+
+      await fetch('/api/reviews', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(reviewData)
+      });
+
+      fetchConcepts(user.id);
+      setReviewingConcept(null);
+    } catch (err) {
+      console.error("Failed to update review", err);
+    }
   };
 
-  const handleAddConcept = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAddConcept = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!user) return;
     const formData = new FormData(e.currentTarget);
-    const newConcept: Concept = {
+    const newConcept = {
       id: Date.now().toString(),
+      user_id: user.id,
       title: formData.get('title') as string,
       subject: formData.get('subject') as string,
       description: formData.get('description') as string,
@@ -113,16 +256,124 @@ const App: React.FC = () => {
       lastReviewed: '-',
       nextReviewDate: new Date().toISOString().split('T')[0],
       retentionScore: 0,
-      reviews: [],
       status: 'New'
     };
-    setConcepts([...concepts, newConcept]);
-    setIsAddingConcept(false);
+
+    const conceptData = {
+      ...newConcept,
+      questions: showQuestionsForm ? manualQuestions.filter(q => q.question.trim() !== '') : []
+    };
+
+    try {
+      const response = await fetch('/api/concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(conceptData)
+      });
+      if (response.ok) {
+        fetchConcepts(user.id);
+        setIsAddingConcept(false);
+        setShowQuestionsForm(false);
+        setManualQuestions(Array(10).fill({
+          question: '',
+          options: ['', '', '', ''],
+          correctAnswerIndex: 0,
+          explanation: ''
+        }));
+      }
+    } catch (err) {
+      console.error("Failed to add concept", err);
+    }
   };
 
-  const handleDeleteConcept = (id: string) => {
+  const handleMarkAttendance = async (status: 'Present' | 'Absent') => {
+    if (!user) return;
+    const record: Attendance = {
+      id: Date.now().toString(),
+      user_id: user.id,
+      date: new Date().toISOString().split('T')[0],
+      status,
+      semester: 'Spring 2026'
+    };
+    try {
+      const response = await fetch('/api/attendance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(record)
+      });
+      if (response.ok) {
+        setAttendance([...attendance, record]);
+      }
+    } catch (err) {
+      console.error('Mark attendance error:', err);
+    }
+  };
+
+  const handleAddAssignment = async (assignment: Partial<Assignment>) => {
+    if (!user) return;
+    const newAssignment: Assignment = {
+      id: Date.now().toString(),
+      user_id: user.id,
+      title: assignment.title || '',
+      subject: assignment.subject || '',
+      due_date: assignment.due_date || '',
+      status: 'Pending',
+      semester: assignment.semester || 'Spring 2026'
+    };
+    try {
+      const response = await fetch('/api/assignments', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(newAssignment)
+      });
+      if (response.ok) {
+        setAssignments([...assignments, newAssignment]);
+      }
+    } catch (err) {
+      console.error('Add assignment error:', err);
+    }
+  };
+
+  const handleUpdateAssignment = async (id: string, status: 'Submitted', marks: number) => {
+    try {
+      const response = await fetch(`/api/assignments/${id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ status, marks })
+      });
+      if (response.ok) {
+        setAssignments(assignments.map(a => a.id === id ? { ...a, status, marks } : a));
+      }
+    } catch (err) {
+      console.error('Update assignment error:', err);
+    }
+  };
+
+  const handleDeleteConcept = async (id: string) => {
     if (confirm('Are you sure you want to delete this concept?')) {
-      setConcepts(concepts.filter(c => c.id !== id));
+      try {
+        const response = await fetch(`/api/concepts/${id}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (response.ok && user) {
+          fetchConcepts(user.id);
+        }
+      } catch (err) {
+        console.error("Failed to delete concept", err);
+      }
     }
   };
 
@@ -156,12 +407,61 @@ const App: React.FC = () => {
     return data;
   }, [concepts]);
 
+  const filteredConcepts = useMemo(() => {
+    return concepts.filter(c => {
+      const matchesSearch = c.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        c.description.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSubject = selectedSubject === 'All Subjects' || c.subject === selectedSubject;
+      return matchesSearch && matchesSubject;
+    });
+  }, [concepts, searchQuery, selectedSubject]);
+
+  const adoptConcept = async (concept: Concept) => {
+    if (!user) return;
+    const newConcept = {
+      ...concept,
+      id: Date.now().toString(),
+      user_id: user.id,
+      is_official: 0,
+      status: 'New',
+      retentionScore: 0,
+      lastReviewed: '-',
+      nextReviewDate: new Date().toISOString().split('T')[0],
+      reviews: []
+    };
+
+    try {
+      const response = await fetch('/api/concepts', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify(newConcept)
+      });
+      if (response.ok) {
+        fetchConcepts(user.id);
+      }
+    } catch (err) {
+      console.error("Failed to adopt concept", err);
+    }
+  };
+
   if (!isLoggedIn) {
     return <Login onLogin={handleLogin} />;
   }
 
   return (
-    <Layout activeTab={activeTab} setActiveTab={setActiveTab} onSettingsClick={() => setIsSettingsOpen(true)}>
+    <Layout
+      activeTab={activeTab}
+      setActiveTab={setActiveTab}
+      onSettingsClick={() => setIsSettingsOpen(true)}
+      isDarkMode={isDarkMode}
+      toggleTheme={toggleTheme}
+      username={user?.username || 'Scholar'}
+      level={stats.level}
+      levelProgress={stats.levelProgress}
+    >
       {activeTab === 'dashboard' && (
         <div className="space-y-8 animate-fadeIn">
           {/* Header Stats */}
@@ -174,47 +474,7 @@ const App: React.FC = () => {
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             {/* Chart Area */}
-            <div className="lg:col-span-2 bg-white p-8 rounded-[2rem] border border-slate-100 shadow-[0_10px_40px_rgba(0,0,0,0.03)]">
-              <div className="flex items-center justify-between mb-8">
-                <div>
-                  <h3 className="text-lg font-extrabold text-slate-900 tracking-tight">Knowledge Growth</h3>
-                  <p className="text-sm font-medium text-slate-400">Memory retention trend for the last week</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full bg-indigo-500" />
-                  <span className="text-xs font-bold text-slate-500">Active Retention</span>
-                </div>
-              </div>
-              <div className="h-72">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={chartData}>
-                    <defs>
-                      <linearGradient id="colorScore" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#6366f1" stopOpacity={0.15} />
-                        <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="6 6" vertical={false} stroke="#f1f5f9" />
-                    <XAxis
-                      dataKey="name"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }}
-                    />
-                    <YAxis
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }}
-                      domain={[0, 100]}
-                    />
-                    <Tooltip
-                      contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)', fontWeight: 700 }}
-                    />
-                    <Area type="monotone" dataKey="score" stroke="#6366f1" strokeWidth={4} fillOpacity={1} fill="url(#colorScore)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            </div>
+            <KnowledgeChart data={chartData} />
 
             {/* AI Insights Card */}
             <div className="bg-slate-900 p-10 rounded-[2.5rem] shadow-2xl text-white relative overflow-hidden group">
@@ -246,44 +506,49 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Critical Concepts List */}
-          <div className="space-y-6">
-            <div className="flex items-end justify-between">
-              <div>
-                <h3 className="text-xl font-extrabold text-slate-900 tracking-tight">Need Attention</h3>
-                <p className="text-sm font-medium text-slate-400">Concepts with retention dropping below 80%</p>
-              </div>
-              <button
-                onClick={() => setActiveTab('concepts')}
-                className="text-indigo-600 text-sm font-bold hover:underline"
-              >
-                View All Concepts
-              </button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              {concepts
-                .filter(c => c.retentionScore < 80)
-                .sort((a, b) => a.retentionScore - b.retentionScore)
-                .slice(0, 3)
-                .map(concept => (
-                  <ConceptCard
-                    key={concept.id}
-                    concept={concept}
-                    onReview={setReviewingConcept}
-                    onDelete={handleDeleteConcept}
-                  />
+          {/* Adaptive Study Plan */}
+          <AdaptiveStudyPlan
+            token={token!}
+            onStartReview={(conceptId) => {
+              const concept = concepts.find(c => c.id === conceptId);
+              if (concept) setReviewingConcept(concept);
+            }}
+          />
+
+          <div className="bg-gradient-to-br from-slate-900 to-indigo-950 p-8 rounded-[2.5rem] text-white shadow-2xl relative overflow-hidden">
+            <h3 className="text-xl font-bold mb-6 flex items-center gap-2">
+              <span className="text-amber-400">🗺️</span> Mastery Roadmap
+            </h3>
+            <div className="space-y-4 relative z-10">
+              {concepts.length > 0 ? (
+                concepts.slice(0, 4).map((c, idx) => (
+                  <div key={c.id} className="flex items-center gap-4 group">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${c.retentionScore > 80 ? 'bg-emerald-500' : 'bg-slate-700'}`}>
+                      {c.retentionScore > 80 ? '✓' : idx + 1}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-sm font-bold group-hover:text-amber-400 transition-colors">{c.title}</div>
+                      <div className={`text-[10px] uppercase tracking-wider font-black ${c.retentionScore > 80 ? 'text-emerald-400' : 'text-slate-500'}`}>
+                        {c.retentionScore > 80 ? 'Mastered' : 'In Progress'}
+                      </div>
+                    </div>
+                    <div className="text-xs font-mono text-slate-400">{c.retentionScore}%</div>
+                  </div>
                 ))
-              }
+              ) : (
+                <p className="text-slate-500 text-sm italic">Add concepts to generate your roadmap...</p>
+              )}
             </div>
+            <div className="absolute top-0 right-0 w-32 h-32 bg-amber-400/10 rounded-full blur-3xl" />
           </div>
         </div>
       )}
 
       {activeTab === 'concepts' && (
         <div className="animate-fadeIn space-y-10">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-6 bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm">
+          <div className={`flex flex-col sm:flex-row items-center justify-between gap-6 p-8 rounded-[2rem] border transition-colors ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100 shadow-sm'}`}>
             <div>
-              <h3 className="text-3xl font-black text-slate-900 tracking-tight">Knowledge Base</h3>
+              <h3 className={`text-3xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Knowledge Base</h3>
               <p className="text-slate-400 font-medium">Your personal digital textbook organized for recall.</p>
             </div>
             <button
@@ -297,194 +562,352 @@ const App: React.FC = () => {
             </button>
           </div>
 
+          <SearchFilter
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            selectedSubject={selectedSubject}
+            setSelectedSubject={setSelectedSubject}
+            subjects={SUBJECTS}
+          />
+
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {concepts.map(concept => (
-              <ConceptCard
-                key={concept.id}
-                concept={concept}
-                onReview={setReviewingConcept}
-                onDelete={handleDeleteConcept}
-              />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {activeTab === 'analytics' && (
-        <div className="animate-fadeIn space-y-10">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-            <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-sm">
-              <h3 className="text-xl font-extrabold mb-8 tracking-tight">Cognitive Load Distribution</h3>
-              <div className="h-80">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={concepts.reduce((acc: any[], c) => {
-                    const existing = acc.find(item => item.subject === c.subject);
-                    if (existing) existing.count += 1;
-                    else acc.push({ subject: c.subject, count: 1 });
-                    return acc;
-                  }, [])}>
-                    <CartesianGrid strokeDasharray="10 10" vertical={false} stroke="#f8fafc" />
-                    <XAxis dataKey="subject" axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }} />
-                    <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 11, fontWeight: 700 }} />
-                    <Tooltip
-                      cursor={{ fill: '#f8fafc', radius: 12 }}
-                      contentStyle={{ borderRadius: '20px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)', fontWeight: 700 }}
-                    />
-                    <Bar dataKey="count" radius={[12, 12, 12, 12]} barSize={40}>
-                      {concepts.map((_, index) => (
-                        <Cell key={`cell-${index}`} fill={['#6366f1', '#10b981', '#f59e0b', '#ef4444'][index % 4]} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
+            {filteredConcepts.length > 0 ? (
+              filteredConcepts.map(concept => (
+                <ConceptCard
+                  key={concept.id}
+                  concept={concept}
+                  onReview={setReviewingConcept}
+                  onDelete={handleDeleteConcept}
+                />
+              ))
+            ) : (
+              <div className="col-span-full py-20 text-center">
+                <div className="text-6xl mb-6">🔍</div>
+                <h4 className="text-2xl font-bold text-slate-400 mb-2">No matching concepts found</h4>
+                <p className="text-slate-500 font-medium">Try adjusting your search or subject filter.</p>
+                <button
+                  onClick={() => { setSearchQuery(''); setSelectedSubject('All Subjects'); }}
+                  className="mt-8 px-8 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                >
+                  Clear All Filters
+                </button>
               </div>
-            </div>
+            )}
+          </div>
 
-            <div className="bg-white p-10 rounded-[2.5rem] border border-slate-100 shadow-sm">
-              <h3 className="text-xl font-extrabold mb-8 tracking-tight">Mastery Leaderboard</h3>
-              <div className="space-y-8 max-h-80 overflow-y-auto custom-scrollbar pr-4">
-                {concepts.sort((a, b) => b.retentionScore - a.retentionScore).map((c, idx) => (
-                  <div key={c.id} className="group">
-                    <div className="flex justify-between items-center mb-3">
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-black text-slate-300 w-4">0{idx + 1}</span>
-                        <span className="font-bold text-slate-800 group-hover:text-indigo-600 transition-colors">{c.title}</span>
+          {/* Official Concepts Discovery */}
+          {officialConcepts.length > 0 && (
+            <div className="space-y-6 pt-10 border-t border-white/5">
+              <h3 className="text-xl font-black text-indigo-400 uppercase tracking-widest">Official Curriculum Nodes</h3>
+              <div className="flex gap-4 overflow-x-auto pb-6 custom-scrollbar">
+                {officialConcepts.filter(oc => !concepts.some(c => c.title === oc.title)).map(oc => (
+                  <div key={oc.id} className="min-w-[300px] p-6 bg-indigo-600/5 border border-indigo-500/20 rounded-3xl flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-[10px] font-black text-indigo-400 uppercase">{oc.subject}</span>
+                        <span className="text-[10px] font-black text-slate-500 uppercase">{oc.difficulty}</span>
                       </div>
-                      <span className="text-sm font-black text-indigo-600">{c.retentionScore}%</span>
+                      <h4 className="font-bold text-lg mb-2 text-white">{oc.title}</h4>
+                      <p className="text-xs text-slate-400 line-clamp-2 mb-4">{oc.description}</p>
                     </div>
-                    <div className="w-full h-2.5 bg-slate-50 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-in-out"
-                        style={{ width: `${c.retentionScore}%` }}
-                      />
-                    </div>
+                    <button
+                      onClick={() => adoptConcept(oc)}
+                      className="w-full py-2 bg-indigo-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-indigo-500 transition-all active:scale-95"
+                    >
+                      Initialize Tracking
+                    </button>
                   </div>
                 ))}
               </div>
             </div>
-          </div>
+          )}
         </div>
-      )}
+      )
+      }
+
+      {
+        activeTab === 'analytics' && (
+          <div className="animate-fadeIn space-y-10">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+              <div className="bg-white dark:bg-slate-800 p-10 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm">
+                <h3 className={`text-xl font-extrabold mb-8 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Performance Overview</h3>
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center p-6 rounded-2xl bg-indigo-50/50 dark:bg-indigo-900/10 border border-indigo-100 dark:border-indigo-900/20">
+                    <span className="text-sm font-bold text-slate-500 dark:text-slate-400">Attendance Rate</span>
+                    <span className="text-2xl font-black text-indigo-600">
+                      {attendance.length > 0 ? Math.round((attendance.filter(a => a.status === 'Present').length / attendance.length) * 100) : 0}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center p-6 rounded-2xl bg-emerald-50/50 dark:bg-emerald-900/10 border border-emerald-100 dark:border-emerald-900/20">
+                    <span className="text-sm font-bold text-slate-500 dark:text-slate-400">Assignment Avg</span>
+                    <span className="text-2xl font-black text-emerald-600">
+                      {assignments.filter(a => a.marks !== undefined).length > 0
+                        ? Math.round(assignments.filter(a => a.marks !== undefined).reduce((acc, a) => acc + (a.marks || 0), 0) / assignments.filter(a => a.marks !== undefined).length)
+                        : 0}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-slate-800 p-10 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm">
+                <h3 className={`text-xl font-extrabold mb-8 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Knowledge Analysis</h3>
+                <div className="h-64">
+                  <KnowledgeChart data={chartData} />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-white dark:bg-slate-800 p-10 rounded-[2.5rem] border border-slate-100 dark:border-slate-700 shadow-sm mt-10">
+              <h3 className={`text-xl font-extrabold mb-8 tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Scholar Achievements</h3>
+              <div className="flex flex-wrap gap-8">
+                {SUBJECTS.map(subject => {
+                  const subjectConcepts = concepts.filter(c => c.subject === subject);
+                  if (subjectConcepts.length === 0) return null;
+                  const avg = subjectConcepts.reduce((acc, c) => acc + c.retentionScore, 0) / subjectConcepts.length;
+                  const isMastered = avg >= 90;
+                  const isCompetent = avg >= 70;
+
+                  return (
+                    <div key={subject} className={`flex flex-col items-center gap-3 p-6 rounded-3xl border transition-all ${isMastered ? 'bg-indigo-50/50 border-indigo-200' : isCompetent ? 'bg-emerald-50/50 border-emerald-200' : 'bg-slate-50 opacity-40 grayscale border-slate-200'}`}>
+                      <div className={`w-16 h-16 rounded-full flex items-center justify-center text-2xl shadow-inner ${isMastered ? 'bg-indigo-600 text-white' : isCompetent ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                        {subject === 'Physics' ? '⚛️' : subject === 'Biology' ? '🧬' : subject === 'Computer Science' ? '💻' : subject === 'Mathematics' ? '📐' : '📖'}
+                      </div>
+                      <div>
+                        <p className={`text-xs font-black uppercase tracking-widest text-center ${isMastered ? 'text-indigo-600' : isCompetent ? 'text-emerald-600' : 'text-slate-400'}`}>{subject}</p>
+                        <p className="text-[10px] font-bold text-slate-400 text-center uppercase">{isMastered ? 'Master' : isCompetent ? 'Scholar' : 'Novice'}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'performance' && (
+          <div className="space-y-12 animate-fadeIn">
+            <AttendanceTracker
+              attendance={attendance}
+              onAdd={handleMarkAttendance}
+              isDarkMode={isDarkMode}
+            />
+            <AssignmentTracker
+              assignments={assignments}
+              onAdd={handleAddAssignment}
+              onUpdate={handleUpdateAssignment}
+              isDarkMode={isDarkMode}
+            />
+          </div>
+        )
+      }
+
+      {
+        activeTab === 'admin-panel' && user && user.role === 'admin' && (
+          <AdminPanel token={token!} />
+        )
+      }
+
+      {
+        activeTab === 'faculty-hub' && user && (user.role === 'faculty' || user.role === 'admin') && (
+          <FacultyHub token={token!} />
+        )
+      }
 
       {/* Modals */}
-      {reviewingConcept && (
-        <QuizModal
-          concept={reviewingConcept}
-          onClose={() => setReviewingConcept(null)}
-          onComplete={handleReviewComplete}
-        />
-      )}
+      {
+        reviewingConcept && (
+          <QuizModal
+            concept={reviewingConcept}
+            onClose={() => setReviewingConcept(null)}
+            onComplete={handleReviewComplete}
+          />
+        )
+      }
 
-      {isAddingConcept && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-6">
-          <div className="bg-white rounded-[2.5rem] shadow-2xl max-w-xl w-full overflow-hidden animate-fadeIn">
-            <div className="p-10">
-              <div className="flex justify-between items-center mb-8">
-                <h3 className="text-3xl font-black text-slate-900 tracking-tight">Expand Library</h3>
-                <button onClick={() => setIsAddingConcept(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-400 hover:text-slate-600 rounded-xl transition-all">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <form onSubmit={handleAddConcept} className="space-y-6">
-                <div>
-                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Concept Name</label>
-                  <input
-                    name="title"
-                    required
-                    placeholder="e.g. Heapsort Algorithm"
-                    className="w-full px-6 py-4 rounded-2xl bg-slate-50 border border-slate-100 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold"
-                  />
+      {
+        isAddingConcept && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-6">
+            <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl max-w-xl w-full overflow-hidden animate-fadeIn border border-white/5">
+              <div className="p-10">
+                <div className="flex justify-between items-center mb-8">
+                  <h3 className={`text-3xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Expand Library</h3>
+                  <button onClick={() => setIsAddingConcept(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 rounded-xl transition-all">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-                <div className="grid grid-cols-2 gap-6">
+                <form onSubmit={handleAddConcept} className="space-y-6">
                   <div>
-                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Subject</label>
-                    <select name="subject" className="w-full px-6 py-4 rounded-2xl bg-slate-50 border border-slate-100 outline-none font-bold appearance-none">
-                      {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
-                    </select>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Concept Name</label>
+                    <input
+                      name="title"
+                      required
+                      placeholder="e.g. Heapsort Algorithm"
+                      className="w-full px-6 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold text-slate-700 dark:text-slate-200"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Subject</label>
+                      <select name="subject" className="w-full px-6 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 outline-none font-bold appearance-none text-slate-700 dark:text-slate-200 cursor-pointer">
+                        {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Complexity</label>
+                      <select name="difficulty" className="w-full px-6 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 outline-none font-bold appearance-none text-slate-700 dark:text-slate-200 cursor-pointer">
+                        <option value={Difficulty.EASY}>Beginner</option>
+                        <option value={Difficulty.MEDIUM}>Intermediate</option>
+                        <option value={Difficulty.HARD}>Advanced</option>
+                      </select>
+                    </div>
                   </div>
                   <div>
-                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Complexity</label>
-                    <select name="difficulty" className="w-full px-6 py-4 rounded-2xl bg-slate-50 border border-slate-100 outline-none font-bold appearance-none">
-                      <option value={Difficulty.EASY}>Beginner</option>
-                      <option value={Difficulty.MEDIUM}>Intermediate</option>
-                      <option value={Difficulty.HARD}>Advanced</option>
-                    </select>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Knowledge Summary</label>
+                    <textarea
+                      name="description"
+                      rows={3}
+                      required
+                      placeholder="The core definition or logic of this concept..."
+                      className="w-full px-6 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold text-slate-700 dark:text-slate-200"
+                    />
                   </div>
-                </div>
-                <div>
-                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Knowledge Summary</label>
-                  <textarea
-                    name="description"
-                    rows={3}
-                    required
-                    placeholder="The core definition or logic of this concept..."
-                    className="w-full px-6 py-4 rounded-2xl bg-slate-50 border border-slate-100 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold"
-                  />
-                </div>
-                <button className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 shadow-xl shadow-indigo-100 mt-6 transition-all active:scale-95">
-                  Register Concept
-                </button>
-              </form>
+
+                  <div className="pt-4">
+                    <button
+                      type="button"
+                      onClick={() => setShowQuestionsForm(!showQuestionsForm)}
+                      className={`w-full py-4 rounded-2xl border-2 transition-all flex items-center justify-center gap-3 font-bold ${showQuestionsForm ? 'border-rose-500 bg-rose-50 dark:bg-rose-900/20 text-rose-600' : 'border-slate-100 dark:border-slate-800 text-slate-500 hover:border-indigo-500 hover:text-indigo-600'}`}
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      {showQuestionsForm ? 'Discard Custom Quiz' : 'Add 10 Custom Quiz Questions'}
+                    </button>
+                  </div>
+
+                  {showQuestionsForm && (
+                    <div className="space-y-8 max-h-96 overflow-y-auto pr-2 custom-scrollbar border-t border-slate-100 dark:border-slate-800 pt-6">
+                      <p className="text-xs font-black text-indigo-500 uppercase tracking-widest mb-4">Quiz Architecture (10 Questions)</p>
+                      {manualQuestions.map((q, qIdx) => (
+                        <div key={qIdx} className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl border border-slate-100 dark:border-slate-700 space-y-4">
+                          <p className="text-[10px] font-black uppercase text-slate-400">Node {qIdx + 1}</p>
+                          <input
+                            placeholder={`Question ${qIdx + 1}`}
+                            className="w-full bg-transparent border-b border-slate-200 dark:border-slate-700 py-2 outline-none font-bold text-sm"
+                            value={q.question}
+                            onChange={(e) => {
+                              const newQs = [...manualQuestions];
+                              newQs[qIdx] = { ...q, question: e.target.value };
+                              setManualQuestions(newQs);
+                            }}
+                          />
+                          <div className="grid grid-cols-2 gap-3">
+                            {q.options.map((opt, oIdx) => (
+                              <input
+                                key={oIdx}
+                                placeholder={`Option ${oIdx + 1}`}
+                                className="w-full bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl px-4 py-2 text-xs font-medium outline-none focus:border-indigo-500"
+                                value={opt}
+                                onChange={(e) => {
+                                  const newQs = [...manualQuestions];
+                                  const newOpts = [...q.options];
+                                  newOpts[oIdx] = e.target.value;
+                                  newQs[qIdx] = { ...q, options: newOpts };
+                                  setManualQuestions(newQs);
+                                }}
+                              />
+                            ))}
+                          </div>
+                          <div className="flex gap-4">
+                            <div className="flex-1">
+                              <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Correct Option</label>
+                              <select
+                                value={q.correctAnswerIndex}
+                                onChange={(e) => {
+                                  const newQs = [...manualQuestions];
+                                  newQs[qIdx] = { ...q, correctAnswerIndex: parseInt(e.target.value) };
+                                  setManualQuestions(newQs);
+                                }}
+                                className="w-full bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl px-4 py-2 text-xs font-bold outline-none"
+                              >
+                                {[0, 1, 2, 3].map(i => <option key={i} value={i}>Option {i + 1}</option>)}
+                              </select>
+                            </div>
+                            <div className="flex-[2]">
+                              <label className="block text-[10px] font-black text-slate-400 uppercase mb-1">Explanation</label>
+                              <input
+                                placeholder="Why is this correct?"
+                                className="w-full bg-white dark:bg-slate-900 border border-slate-100 dark:border-slate-800 rounded-xl px-4 py-2 text-xs outline-none"
+                                value={q.explanation}
+                                onChange={(e) => {
+                                  const newQs = [...manualQuestions];
+                                  newQs[qIdx] = { ...q, explanation: e.target.value };
+                                  setManualQuestions(newQs);
+                                }}
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <button className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 shadow-xl shadow-indigo-100 dark:shadow-none mt-6 transition-all active:scale-95">
+                    Register Concept
+                  </button>
+                </form>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-
-      {isSettingsOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-6">
-          <div className="bg-white rounded-[2.5rem] shadow-2xl max-w-md w-full overflow-hidden animate-fadeIn">
-            <div className="p-8">
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="text-2xl font-black text-slate-900 tracking-tight">Settings</h3>
-                <button onClick={() => setIsSettingsOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 text-slate-400 hover:text-slate-600 rounded-xl transition-all">
-                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                </button>
-              </div>
-              <div className="space-y-6">
-                <div>
-                  <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Gemini API Key</label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Enter your API Key..."
-                    className="w-full px-6 py-4 rounded-2xl bg-slate-50 border border-slate-100 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold text-slate-700"
-                  />
-                  <p className="text-xs text-slate-400 mt-3 font-medium">
-                    Your key is stored locally in your browser. Get one at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-500 hover:underline">Google AI Studio</a>.
-                  </p>
+      {
+        isSettingsOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-md p-6">
+            <div className="bg-white dark:bg-slate-900 rounded-[2.5rem] shadow-2xl max-w-md w-full overflow-hidden animate-fadeIn border border-white/5">
+              <div className="p-8">
+                <div className="flex justify-between items-center mb-6">
+                  <h3 className={`text-2xl font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Settings</h3>
+                  <button onClick={() => setIsSettingsOpen(false)} className="w-10 h-10 flex items-center justify-center bg-slate-100 dark:bg-slate-800 text-slate-400 hover:text-slate-600 rounded-xl transition-all">
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
                 </div>
-                <button onClick={() => setIsSettingsOpen(false)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 shadow-lg shadow-indigo-100 transition-all active:scale-95 mb-4">
-                  Save Settings
-                </button>
-                <button onClick={handleLogout} className="w-full py-4 bg-slate-100 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 hover:text-red-500 transition-all active:scale-95 flex items-center justify-center gap-2 group">
-                  <i className="fa-solid fa-right-from-bracket group-hover:text-red-500 transition-colors"></i>
-                  Sign Out
-                </button>
+                <div className="space-y-6">
+                  <div>
+                    <label className="block text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Gemini API Key</label>
+                    <input
+                      type="password"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      placeholder="Enter your API Key..."
+                      className="w-full px-6 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-100 dark:border-slate-700 focus:bg-white dark:focus:bg-slate-700 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all outline-none font-bold text-slate-700 dark:text-slate-200"
+                    />
+                    <p className="text-xs text-slate-400 mt-3 font-medium">
+                      Your key is stored locally in your browser. Get one at <a href="https://aistudio.google.com/app/apikey" target="_blank" className="text-indigo-500 hover:underline">Google AI Studio</a>.
+                    </p>
+                  </div>
+                  <button onClick={() => setIsSettingsOpen(false)} className="w-full py-4 bg-indigo-600 text-white rounded-2xl font-black hover:bg-indigo-700 shadow-lg shadow-indigo-100 dark:shadow-none transition-all active:scale-95 mb-4">
+                    Save Settings
+                  </button>
+                  <button onClick={handleLogout} className="w-full py-4 bg-slate-100 dark:bg-slate-800 text-slate-500 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 hover:text-red-500 transition-all active:scale-95 flex items-center justify-center gap-2 group">
+                    <i className="fa-solid fa-right-from-bracket group-hover:text-red-500 transition-colors"></i>
+                    Sign Out
+                  </button>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
-    </Layout>
+        )
+      }
+    </Layout >
   );
 };
-
-const StatCard: React.FC<{ label: string, value: string | number, icon: string, gradient: string }> = ({ label, value, icon, gradient }) => (
-  <div className="bg-white p-7 rounded-3xl border border-slate-100 shadow-[0_4px_20px_rgba(0,0,0,0.02)] flex items-center gap-6 group hover:shadow-lg transition-all duration-300">
-    <div className={`w-14 h-14 bg-gradient-to-br ${gradient} rounded-2xl flex items-center justify-center text-3xl shadow-lg group-hover:rotate-6 transition-transform`}>
-      {icon}
-    </div>
-    <div>
-      <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-1">{label}</p>
-      <p className="text-3xl font-black text-slate-900 tracking-tight">{value}</p>
-    </div>
-  </div>
-);
 
 export default App;
